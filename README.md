@@ -1,139 +1,81 @@
 # Codebase Context Graph
 
-**A native tool that scans local codebases and builds a queryable code graph for AI coding agents.**
+Scans a local codebase, parses it with Tree-sitter, and saves what it finds
+(files, modules, functions and classes, with line ranges) to SQLite and JSON.
+A small query server then lets another program ask about that structure
+without reading every file again.
 
-Parses source files with Tree-sitter, stores the graph in SQLite/JSON, and exposes 14 MCP tools over stdio so AI agents can query code structure without re-reading everything.
+Written in Rust. Comes with a command-line tool and a small desktop app.
 
----
+## Install (macOS)
 
-## Download
-
-### macOS (Apple Silicon)
-
-**Option 1: Direct Download**
-
-Go to [Releases](https://github.com/mblando9988/Codebase-Context-Graph/releases/latest) and download `codebase-context-graph-macos.tar.gz`:
+Download `codebase-context-graph-macos.tar.gz` from
+[Releases](https://github.com/mblando9988/Codebase-Context-Graph/releases/latest), or:
 
 ```bash
 curl -L https://github.com/mblando9988/Codebase-Context-Graph/releases/latest/download/codebase-context-graph-macos.tar.gz | tar -xz
 cd codebase-context-graph-macos
-./codebase-context-graph index --project-root /path/to/your/project
 ```
 
-**Option 2: Desktop App**
+The folder also has `Codebase Context Graph.app` if you want the desktop app.
 
-Extract the download and open `Codebase Context Graph.app` for a GUI interface.
-
----
-
-## Quick Start
+## Use
 
 ```bash
-# Initialize project config
-./codebase-context-graph init --project-root /path/to/project
-
-# Build the code graph
-./codebase-context-graph index --project-root /path/to/project
-
-# Start MCP server for AI agents
-./codebase-context-graph serve --project-root /path/to/project
+./codebase-context-graph init  --project-root /path/to/project   # writes .codebase-context/config.json
+./codebase-context-graph index --project-root /path/to/project   # scans and parses the project
+./codebase-context-graph smoke --project-root /path/to/project   # checks the database and prints the node count
+./codebase-context-graph serve --project-root /path/to/project   # starts the query server
 ```
 
----
+Everything it writes goes in one folder inside your project:
 
-## Commands
+```
+.codebase-context/
+├── config.json   # ignore patterns and settings
+├── graph.db      # SQLite
+└── graph.json    # the same data as JSON
+```
 
-| Command | Description |
-|---------|-------------|
-| `init` | Create `.codebase-context/config.json` |
-| `index` | Build the code graph (standard mode) |
-| `index --analysis-mode advanced` | Build full CPG (AST/CFG/DFG) |
-| `smoke` | Quick validation test |
-| `serve` | Start MCP stdio server |
-| `watch` | Reindex on file changes |
+## Languages
 
----
+JavaScript, TypeScript, Python, Bash and Rust, through Tree-sitter.
 
-## MCP Integration
+## Query server
 
-Add to your Claude Code or IDE MCP configuration:
+`serve` reads one JSON request per line on stdin and writes one answer per
+line on stdout. Answers are compact tables in TOON format.
 
 ```json
-{
-  "mcpServers": {
-    "codebase-context": {
-      "command": "/absolute/path/to/codebase-context-graph",
-      "args": ["serve", "--project-root", "/path/to/your/project"]
-    }
-  }
-}
+{"method": "search_symbols", "params": {"query": "parse", "limit": 20}}
 ```
 
----
+| Method | Params | Returns |
+|--------|--------|---------|
+| `get_overview` | | Counts of files, modules and functions |
+| `get_module_map` | | Every module |
+| `get_file_structure` | `file_path` | Symbols in one file with their line ranges |
+| `search_symbols` | `query`, `limit` | Symbols whose name matches |
+| `get_node_detail` | `node_id` | Everything stored for one node |
+| `find_hubs` | `limit` | Nodes ranked by hub score |
 
-## What Gets Created
+## Not done yet
 
-```
-your-project/
-└── .codebase-context/
-    ├── config.json      # Project config
-    ├── graph.db         # SQLite code graph
-    └── graph.json       # JSON-LD export
-```
+- Call and import edges. Right now the graph only links files to what they
+  contain, so `find_hubs` scores are all zero.
+- `watch` runs one index and exits instead of watching for changes.
+- `--analysis-mode advanced` is accepted but doesn't add anything yet.
+- The server uses its own line format, not the MCP protocol.
 
----
-
-## MCP Tools (14 Total)
-
-| Tool | Description |
-|------|-------------|
-| `get_overview` | High-level stats: files, modules, functions |
-| `get_module_map` | Module dependency map |
-| `get_file_structure` | Symbols in a file |
-| `trace_call_path` | Call paths between functions |
-| `impact_analysis` | Impact of changing a node |
-| `find_dependencies` | Upstream/downstream deps |
-| `find_hubs` | Highly connected nodes |
-| `search_symbols` | Search by name pattern |
-| `get_data_flow` | Variable value flow |
-| `get_community` | Nodes in a community |
-| `find_entry_points` | App entry points |
-| `get_cross_cutting` | Cross-cutting concerns |
-| `diff_impact` | Impact of file changes |
-| `get_node_detail` | Full node metadata |
-
----
-
-## Supported Languages
-
-**Tree-sitter parsers:**
-- JavaScript / JSX
-- TypeScript / TSX
-- Python
-- Bash
-- Rust
-
-Regex fallback for config/env heuristic discovery.
-
----
-
-## Architecture
-
-- **Standard index**: Parse tree → Symbol graph with CALLS/IMPORTS/DEPENDS_ON edges
-- **Advanced index**: Adds AST cross-references, control flow (CFG), data flow (DFG)
-- **MCP over stdio**: Returns TOON text or JSON-LD for token efficiency
-- **Community detection**: Louvain algorithm on module dependency graph
-
----
-
-## Building from Source
+## Build from source
 
 ```bash
+cd rust-cli
 cargo build --release
 ./target/release/codebase-context-graph index --project-root /path/to/project
 ```
 
----
+The desktop app builds as `codebase-context-graph-gui` in the same folder.
 
 ## License
 
