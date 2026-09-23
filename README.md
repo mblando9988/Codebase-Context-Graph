@@ -7,17 +7,20 @@ without reading every file again.
 
 Written in Rust. Comes with a command-line tool and a small desktop app.
 
-## Install (macOS)
+## Download (macOS, Apple Silicon)
 
-Download `codebase-context-graph-macos.tar.gz` from
-[Releases](https://github.com/mblando9988/Codebase-Context-Graph/releases/latest), or:
+The v1.0.0 download is a different build from the source here: a Node.js
+indexer and MCP server with a Python desktop app, started by a Rust launcher.
+The Rust code in this repo is a rewrite that covers less so far (see "Not done
+yet" below).
 
 ```bash
-curl -L https://github.com/mblando9988/Codebase-Context-Graph/releases/latest/download/codebase-context-graph-macos.tar.gz | tar -xz
-cd codebase-context-graph-macos
+curl -L https://github.com/mblando9988/Codebase-Context-Graph/releases/latest/download/codebase-context-graph-macos-aarch64.tar.gz | tar -xz
+cd codebase-context-graph-macos-aarch64
 ```
 
 The folder also has `Codebase Context Graph.app` if you want the desktop app.
+To use the Rust version, build from source (below).
 
 ## Use
 
@@ -39,12 +42,14 @@ Everything it writes goes in one folder inside your project:
 
 ## Languages
 
-JavaScript, TypeScript, Python, Bash and Rust, through Tree-sitter.
+JavaScript, TypeScript, Python, Bash and Rust files are parsed with
+Tree-sitter. So far only top-level functions and classes are recorded, and Rust
+files are stored as files only.
 
 ## Query server
 
-`serve` reads one JSON request per line on stdin and writes one answer per
-line on stdout. Answers are compact tables in TOON format.
+`serve` reads one JSON request per line on stdin and writes one JSON answer per
+line on stdout. Most answers hold a small text table in `content`.
 
 ```json
 {"method": "search_symbols", "params": {"query": "parse", "limit": 20}}
@@ -62,9 +67,12 @@ line on stdout. Answers are compact tables in TOON format.
 ## Not done yet
 
 - Call and import edges. Right now the graph only links files to what they
-  contain, so `find_hubs` scores are all zero.
+  contain.
+- Methods, exported and nested symbols, and Rust symbols.
+- `find_hubs` returns no rows yet, and `search_symbols` applies its limit
+  before matching the name, so it can miss symbols.
 - `watch` runs one index and exits instead of watching for changes.
-- `--analysis-mode advanced` is accepted but doesn't add anything yet.
+- `--analysis-mode` is accepted but doesn't add anything yet.
 - The server uses its own line format, not the MCP protocol.
 
 ## Build from source
