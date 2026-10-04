@@ -4,8 +4,8 @@ Builds a queryable graph of a codebase from **compiler-grade semantic indexes** 
 saves it to SQLite and JSON. It does not guess structure from syntax: it runs the
 reference indexer for each language (rust-analyzer, the TypeScript compiler, Pyright)
 and turns their resolved definitions and references into a graph of who defines what,
-who calls whom and what depends on what. A small query server then lets another
-program ask about that structure without reading every file again.
+who calls whom and what depends on what. An MCP server then lets an AI agent ask about
+that structure, in answers of a size it chooses, without reading every file.
 
 Written in Rust. Comes with a command-line tool and a small desktop app.
 
@@ -63,7 +63,7 @@ codebase-context-graph doctor --project-root /path/to/project   # which indexers
 codebase-context-graph init   --project-root /path/to/project   # writes .codebase-context/config.json (keeps an existing one)
 codebase-context-graph index  --project-root /path/to/project   # runs the indexers and builds the graph
 codebase-context-graph smoke  --project-root /path/to/project   # checks the database and prints counts
-codebase-context-graph serve  --project-root /path/to/project   # starts the query server
+codebase-context-graph mcp    --project-root /path/to/project   # serves the graph to AI agents over MCP
 ```
 
 `index --scip some.scip` also ingests an index you built yourself (repeatable).
@@ -142,23 +142,59 @@ Two details worth knowing:
 * When one symbol is defined more than once (two binaries that each have `main`), the first
   definition in path order is the node; the others get a `~2` suffix and `duplicateOf`.
 
-## Query server
+## For AI agents (MCP)
 
-`serve` reads one JSON request per line on stdin and writes one JSON answer per line on
-stdout. Most answers hold a small text table in `content`.
+`codebase-context-graph mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server over stdio. It answers from the saved graph, so an agent asks for the part it needs
+instead of reading files. Run `index` first, then connect it. For Claude Code:
 
-```json
-{"method": "search_symbols", "params": {"query": "render", "limit": 20}}
+```bash
+claude mcp add codebase-graph -- /path/to/codebase-context-graph mcp --project-root /path/to/project
 ```
 
-| Method | Params | Returns |
-|--------|--------|---------|
-| `get_overview` | | Counts, covered files, and what each indexer did |
-| `get_module_map` | | Every directory, its file count and the directories it depends on |
-| `get_file_structure` | `file_path` | Definitions in one file with line ranges and signatures |
-| `search_symbols` | `query`, `limit`, `type` | Definitions whose name or qualified name contains `query`: exact name matches first, then the most depended-on |
-| `get_node_detail` | `node_id` | One node with its metadata and its incoming and outgoing edges |
-| `find_hubs` | `limit`, `type` | Nodes ranked by how many others depend on them |
+Other clients take the same command in their MCP settings:
+
+```json
+{"mcpServers": {"codebase-graph": {"command": "/path/to/codebase-context-graph",
+                                   "args": ["mcp", "--project-root", "/path/to/project"]}}}
+```
+
+| Tool | Use it to |
+|------|-----------|
+| `overview` | See coverage, what the indexers did, which files have no semantic data, and whether any file changed since indexing |
+| `find_symbols` | Find definitions by name: exact name first, then names that start with it, then the most depended-on |
+| `file_outline` | List the definitions in one file with line ranges and signatures |
+| `symbol_detail` | See one definition: signature, doc, container, members, what depends on it and what it depends on, with the lines of each reference |
+| `trace` | Follow dependents (who uses this) or dependencies (what this uses) up to four steps, breadth first |
+| `read_source` | Read exact lines (at most 400 per call) of an indexed file |
+
+Ids come from `find_symbols`, `file_outline` and `trace`, and go into `symbol_detail` and
+`trace`. Lines are 1-based. The server speaks protocol versions 2025-06-18, 2025-03-26 and
+2024-11-05.
+
+### What the server guarantees
+
+These rules are enforced in one place, not by each tool, so no tool can opt out of them.
+
+- **Answers are small.** Every answer is cut to `budget_tokens` (1,000 to 3,000, default
+  1,500; one token is about four bytes). Values past a size limit are cut with `…` and
+  counted in `clipped`. (A client that forwards both the text and the structured copy of an
+  answer to the model pays for it twice.)
+- **Nothing is cut silently.** A list says `shown`, `total` and `next_offset`. When
+  `next_offset` is not null, call again with `offset` set to it: pages join up exactly and a
+  page is never empty while rows remain. A call returns at most 300 rows. A table that does
+  not fit says how many rows it shows, and `trace` says if it stopped after 5,000 nodes.
+- **Input is checked, not corrected.** Unknown parameters, wrong types, out-of-range values and
+  NUL characters are refused with a message that names the problem. Nothing is clamped.
+- **Locations can be trusted or are flagged.** Every file an answer names is compared with the
+  hash recorded at indexing. Files that changed or vanished are listed in `stale_files`, and
+  `overview` lists files added since.
+- **It cannot change anything.** The index is opened read-only, and only files in the index
+  can be read, so a path cannot reach anything else.
+- **Same question, same bytes**, and every answer is checked against its published
+  `outputSchema` before it is sent.
+
+An index rebuilt by `index` while the server runs is picked up without a restart.
 
 ## Configuration
 
@@ -192,10 +228,12 @@ name adds a new indexer. In `command`, `{output}` is the `.scip` file to write a
 
 ## Known limits
 
-- The query server uses its own line format, not the MCP protocol.
 - The desktop app starts `index` and `doctor` and shows their output. It does not display the
-  graph; read `graph.db` or `graph.json`, or use `serve`.
+  graph; read `graph.db` or `graph.json`, or use the MCP server.
 - `--analysis-mode` is accepted and ignored. There is one mode, and it is always semantic.
+- Name search matches ASCII letters without regard to case and everything else exactly.
+- Node ids longer than 640 characters and file paths longer than 480 are shown clipped and
+  cannot be passed back to a tool; `overview` counts the long ids.
 - Every `index` re-runs the indexers and rebuilds everything. `watch` runs one index and exits.
 - One run per top-most project root (`Cargo.toml`, `tsconfig.json`, `package.json`,
   `pyproject.toml`, ...). A monorepo whose root manifest does not cover all packages needs
@@ -213,6 +251,23 @@ name adds a new indexer. In `command`, `{output}` is the `.scip` file to write a
 cd rust-cli
 cargo test --release
 ```
+
+The MCP server is tested against real indexer output, not hand-made data. `rust-cli/fixtures/`
+holds three small projects (TypeScript, Python, Rust) and the `.scip` files the real indexers
+wrote for them, so the tests need none of the indexers installed. The projects contain what a
+happy-path test would miss: recursion, a duplicate `main`, a file no indexer covers, CRLF
+files, a 600-character line, non-ASCII names. After changing one, run
+`fixtures/regenerate.sh`.
+
+- The same rules are applied to every registered tool (size, paging, schema, repeatability,
+  honest totals, refusing bad input, writing nothing), and a test fails if a tool is added
+  without test cases for it.
+- Independent checks recompute each answer another way: a plain in-memory search, the source
+  files themselves, and direct reads of the database. Every call site `trace` reports is
+  checked to mention what it calls.
+- A generated project with 6,500 functions exercises the paging, row and node limits, hubs
+  with thousands of callers, and ids and paths past every limit.
+- `tests/mcp_stdio.rs` runs the real binary over pipes.
 
 ## License
 
