@@ -83,6 +83,9 @@ fn cli_next_to(exe: &Path) -> Option<PathBuf> {
 }
 
 fn cli_binary() -> Result<PathBuf, String> {
+    // The command-line tool ships in the same folder as this app, so it is found from the
+    // app's own path. Nothing security-relevant depends on the result.
+    // nosemgrep: rust.lang.security.current-exe.current-exe
     let exe = std::env::current_exe().map_err(|e| format!("cannot locate this app: {e}"))?;
     cli_next_to(&exe)
         .ok_or_else(|| format!("`{CLI_NAME}` was not found next to {}", exe.display()))
