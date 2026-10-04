@@ -9,22 +9,18 @@ program ask about that structure without reading every file again.
 
 Written in Rust. Comes with a command-line tool and a small desktop app.
 
-## Download (macOS, Apple Silicon)
+## Get started
+
+The project is used straight from this repository; there are no prebuilt downloads. You need
+[Rust](https://rustup.rs), plus the indexers for the languages you want (see below).
 
 ```bash
-curl -L https://github.com/mblando9988/Codebase-Context-Graph/releases/latest/download/codebase-context-graph-macos-aarch64.tar.gz | tar -xz
-cd codebase-context-graph-macos-aarch64
-open "Codebase Context Graph.app"
+cd rust-cli
+cargo build --release
+./target/release/codebase-context-graph-gui    # the desktop app
 ```
 
-The folder holds the desktop app (`Codebase Context Graph.app`) and the command-line tool
-(`codebase-context-graph`). Both need the indexers below. If you download the archive in a
-browser instead, macOS blocks the unsigned app until you run
-`xattr -dr com.apple.quarantine "Codebase Context Graph.app"`.
-
-**v1.0.0 is an older build** that parses with Tree-sitter and serves MCP tools. It predates
-the SCIP indexers described here, and its desktop app is a different program. Use a
-release newer than v1.0.0, or build from source (below).
+The command line is described under [Use](#use).
 
 ## How it works
 
@@ -58,12 +54,16 @@ uncovered, and `index` says so. If no indexer produced anything at all, it exits
 
 ## Use
 
+After the build, the command-line tool is `rust-cli/target/release/codebase-context-graph`.
+The examples call it `codebase-context-graph`: put that folder on your `PATH` or use the
+full path.
+
 ```bash
-./codebase-context-graph doctor --project-root /path/to/project   # which indexers are installed
-./codebase-context-graph init   --project-root /path/to/project   # writes .codebase-context/config.json (keeps an existing one)
-./codebase-context-graph index  --project-root /path/to/project   # runs the indexers and builds the graph
-./codebase-context-graph smoke  --project-root /path/to/project   # checks the database and prints counts
-./codebase-context-graph serve  --project-root /path/to/project   # starts the query server
+codebase-context-graph doctor --project-root /path/to/project   # which indexers are installed
+codebase-context-graph init   --project-root /path/to/project   # writes .codebase-context/config.json (keeps an existing one)
+codebase-context-graph index  --project-root /path/to/project   # runs the indexers and builds the graph
+codebase-context-graph smoke  --project-root /path/to/project   # checks the database and prints counts
+codebase-context-graph serve  --project-root /path/to/project   # starts the query server
 ```
 
 `index --scip some.scip` also ingests an index you built yourself (repeatable).
@@ -84,16 +84,17 @@ with cargo, which creates `target/` if it is not there yet.
 
 ## Desktop app
 
-`Codebase Context Graph.app` is a small window around the command-line tool, so both run
-the same engine. Choose a project folder and press **Index project**. The window shows the
-indexer output and, when it finishes, the node and edge counts and how many files had
-semantic data; **Open results folder** opens `.codebase-context/`. **Check indexers** runs
-`doctor`, and **Stop** ends a run, including the indexers it started.
+`codebase-context-graph-gui` is a small window around the command-line tool, so both run
+the same engine. It starts the `codebase-context-graph` binary that sits next to it, so run
+it from `rust-cli/target/release/`. Choose a project folder and press **Index project**. The
+window shows the indexer output and, when it finishes, the node and edge counts and how many
+files had semantic data; **Open results folder** opens `.codebase-context/`. **Check
+indexers** runs `doctor`, and **Stop** ends a run, including the indexers it started.
 
-An app opened from Finder does not get your shell's `PATH`, so it also looks for the
-indexers in `~/.cargo/bin`, `~/.local/bin`, `~/.volta/bin`, `~/.npm-global/bin`,
-`/opt/homebrew/bin` and `/usr/local/bin`. Put an absolute path in `command` (see
-Configuration) if yours live elsewhere.
+If the app is started without your shell's `PATH` (from Finder or the Dock, for example), it
+also looks for the indexers in `~/.cargo/bin`, `~/.local/bin`, `~/.volta/bin`,
+`~/.npm-global/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. Put an absolute path in
+`command` (see Configuration) if yours live elsewhere.
 
 ## Languages
 
@@ -194,8 +195,7 @@ name adds a new indexer. In `command`, `{output}` is the `.scip` file to write a
 - The query server uses its own line format, not the MCP protocol.
 - The desktop app starts `index` and `doctor` and shows their output. It does not display the
   graph; read `graph.db` or `graph.json`, or use `serve`.
-- `--analysis-mode` (the "Advanced" option of v1.0.0) is accepted and ignored. There is one
-  mode, and it is always semantic.
+- `--analysis-mode` is accepted and ignored. There is one mode, and it is always semantic.
 - Every `index` re-runs the indexers and rebuilds everything. `watch` runs one index and exits.
 - One run per top-most project root (`Cargo.toml`, `tsconfig.json`, `package.json`,
   `pyproject.toml`, ...). A monorepo whose root manifest does not cover all packages needs
@@ -207,22 +207,12 @@ name adds a new indexer. In `command`, `{output}` is the `.scip` file to write a
   `package.json` above the project.
 - The graph is built in memory; it is not tuned for very large repositories.
 
-## Build from source
+## Tests
 
 ```bash
 cd rust-cli
-cargo build --release
-./target/release/codebase-context-graph doctor --project-root /path/to/project
 cargo test --release
 ```
-
-The desktop app builds as `codebase-context-graph-gui` in the same folder. It runs the
-`codebase-context-graph` binary that sits next to it, so start it from there:
-`./target/release/codebase-context-graph-gui`.
-
-A release is published by pushing a tag that starts with `v`; `.github/workflows/release.yml`
-then builds the macOS package. Running that workflow by hand from the Actions tab builds the
-same package without publishing it.
 
 ## License
 
