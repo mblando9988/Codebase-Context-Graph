@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  PACKAGE: codebase-context-graph-macos-aarch64
+
 jobs:
   build-macos:
     runs-on: macos-14
@@ -14,37 +17,25 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
 
-      - name: Build CLI (ARM64)
+      - name: Build
         run: |
           cd rust-cli
-          cargo build --release --target aarch64-apple-darwin --bin codebase-context-graph
+          cargo build --release --locked
 
-      - name: Build GUI (ARM64)
+      - name: Package
         run: |
-          cd rust-cli
-          cargo build --release --target aarch64-apple-darwin --bin codebase-context-graph-gui
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0"; fi
+          APP="$PACKAGE/Codebase Context Graph.app"
 
-      - name: Create universal CLI binary
-        run: |
-          cd rust-cli
-          cargo build --release --target x86_64-apple-darwin --bin codebase-context-graph
-          lipo -create \
-            target/aarch64-apple-darwin/release/codebase-context-graph \
-            target/x86_64-apple-darwin/release/codebase-context-graph \
-            -output ../codebase-context-graph
+          # The app runs the command-line tool that sits next to it, so both go in the bundle.
+          mkdir -p "$APP/Contents/MacOS"
+          cp rust-cli/target/release/codebase-context-graph "$PACKAGE/"
+          cp rust-cli/target/release/codebase-context-graph \
+             rust-cli/target/release/codebase-context-graph-gui \
+             "$APP/Contents/MacOS/"
 
-      - name: Create macOS app bundle
-        run: |
-          mkdir -p "Codebase Context Graph.app/Contents/MacOS"
-          mkdir -p "Codebase Context Graph.app/Contents/Resources"
-          
-          cp codebase-context-graph "Codebase Context Graph.app/Contents/MacOS/"
-          cp rust-cli/target/aarch64-apple-darwin/release/codebase-context-graph-gui "Codebase Context Graph.app/Contents/MacOS/"
-          
-          cat > "Codebase Context Graph.app/Contents/Info.plist" << 'EOF'
+          cat > "$APP/Contents/Info.plist" << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -53,14 +44,16 @@ jobs:
             <string>codebase-context-graph-gui</string>
             <key>CFBundleIdentifier</key>
             <string>com.codebase-context-graph.app</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
             <key>CFBundleName</key>
             <string>Codebase Context Graph</string>
             <key>CFBundleDisplayName</key>
             <string>Codebase Context Graph</string>
             <key>CFBundleVersion</key>
-            <string>1.0.0</string>
+            <string>$VERSION</string>
             <key>CFBundleShortVersionString</key>
-            <string>1.0.0</string>
+            <string>$VERSION</string>
             <key>CFBundlePackageType</key>
             <string>APPL</string>
             <key>LSMinimumSystemVersion</key>
@@ -71,74 +64,54 @@ jobs:
           </plist>
           EOF
 
-      - name: Create release package
-        run: |
-          mkdir -p release
-          
-          cp codebase-context-graph release/
-          cp -R "Codebase Context Graph.app" release/
-          
-          cat > release/README.md << 'EOF'
+          # Ad-hoc signature: not a developer identity, but Apple Silicon expects signed code.
+          codesign --force --deep --sign - "$APP"
+
+          cat > "$PACKAGE/README.md" << 'EOF'
           # Codebase Context Graph
-          
-          A native tool that builds a queryable code graph (SQLite + JSON) from compiler-grade
-          SCIP indexes: definitions, references and calls resolved by rust-analyzer, scip-typescript
-          and scip-python.
-          
+
+          Builds a queryable code graph (SQLite + JSON) from compiler-grade SCIP indexes:
+          definitions, references and calls resolved by rust-analyzer, scip-typescript and
+          scip-python.
+
           ## Requirements
-          
-          The indexers are separate programs. Run `./codebase-context-graph doctor` to see which
-          are installed.
-          
+
+          The indexers are separate programs. The app's "Check indexers" button, or
+          `./codebase-context-graph doctor`, shows which are installed.
+
           - Rust: `rustup component add rust-analyzer`
           - TypeScript / JavaScript: `npm install -g @sourcegraph/scip-typescript`
           - Python: `npm install -g @sourcegraph/scip-python`
-          
-          ## Quick Start
-          
-          ### Option 1: Desktop App (Recommended)
-          
-          Double-click **Codebase Context Graph.app** to launch the GUI.
-          
-          ### Option 2: Command Line
-          
-          ```bash
-          # Check which indexers are installed
-          ./codebase-context-graph doctor --project-root /path/to/project
-          
-          # Initialize a project
-          ./codebase-context-graph init --project-root /path/to/project
-          
-          # Build the code graph
-          ./codebase-context-graph index --project-root /path/to/project
-          
-          # Answer queries as JSON lines on stdin/stdout
-          ./codebase-context-graph serve --project-root /path/to/project
-          ```
-          
-          ## Commands
-          
-          | Command | Description |
-          |---------|-------------|
-          | `doctor` | Check which indexers are installed |
-          | `init` | Create `.codebase-context/config.json` |
-          | `index` | Run the indexers and build the code graph |
-          | `serve` | Answer queries as JSON lines (not MCP) |
-          | `watch` | Runs one index (file watching is not implemented) |
-          | `smoke` | Quick validation test |
-          
+
+          ## Desktop app
+
+          Open **Codebase Context Graph.app**, choose a project folder and press
+          **Index project**. If macOS refuses to open the app because the archive was
+          downloaded in a browser, run this once:
+
+              xattr -dr com.apple.quarantine "Codebase Context Graph.app"
+
+          ## Command line
+
+              ./codebase-context-graph doctor --project-root /path/to/project   # which indexers are installed
+              ./codebase-context-graph index  --project-root /path/to/project   # build the graph
+              ./codebase-context-graph serve  --project-root /path/to/project   # answer queries as JSON lines (not MCP)
+
+          Results are written to `.codebase-context/` inside the project (`graph.db` and
+          `graph.json`). Documentation: https://github.com/mblando9988/Codebase-Context-Graph
+
           ## License
-          
+
           MIT
           EOF
-          
-          tar -czvf codebase-context-graph-macos.tar.gz -C release .
+
+          COPYFILE_DISABLE=1 tar -czf "$PACKAGE.tar.gz" "$PACKAGE"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: codebase-context-graph-macos
-          path: codebase-context-graph-macos.tar.gz
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}.tar.gz
 
   release:
     needs: build-macos
@@ -152,31 +125,27 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: codebase-context-graph-macos
+          name: ${{ env.PACKAGE }}
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: codebase-context-graph-macos.tar.gz
+          files: ${{ env.PACKAGE }}.tar.gz
+          fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
             ## Codebase Context Graph
-            
-            A native macOS app and CLI that build queryable code graphs from compiler-grade SCIP indexes.
-            
-            ### Download
-            
-            Download `codebase-context-graph-macos.tar.gz` and extract.
-            
-            ### Options
-            
-            1. **Desktop App** - Double-click `Codebase Context Graph.app`
-            2. **CLI** - Use `./codebase-context-graph` from Terminal
-            
-            ### Quick Start CLI
+
+            Builds a queryable code graph (SQLite + JSON) from compiler-grade SCIP indexes:
+            rust-analyzer, scip-typescript and scip-python.
+
+            ### Install (macOS, Apple Silicon)
+
             ```bash
-            ./codebase-context-graph doctor --project-root /path/to/project
-            ./codebase-context-graph init --project-root /path/to/project
-            ./codebase-context-graph index --project-root /path/to/project
-            ./codebase-context-graph serve --project-root /path/to/project
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ env.PACKAGE }}.tar.gz | tar -xz
+            cd ${{ env.PACKAGE }}
+            open "Codebase Context Graph.app"
             ```
+
+            The indexers are separate programs; `./codebase-context-graph doctor` shows which
+            are installed. See the README for details.

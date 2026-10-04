@@ -49,16 +49,16 @@ pub fn doctor(project_root: &PathBuf) -> Result<(), Failure> {
         match (found, version) {
             (Some(_), Some(Err(why))) => {
                 missing += 1;
-                println!("  ✗ {:<16} {languages}: `{program}` does not run ({why})", spec.name);
+                println!("  {:<8} {:<16} {languages}: `{program}` does not run ({why})", "broken", spec.name);
                 println!("      install: {}", spec.install_hint);
             }
             (Some(path), version) => {
                 let version = version.and_then(Result::ok).unwrap_or_default();
-                println!("  ✓ {:<16} {languages}: {} {version}", spec.name, path.display());
+                println!("  {:<8} {:<16} {languages}: {} {version}", "ok", spec.name, path.display());
             }
             (None, _) => {
                 missing += 1;
-                println!("  ✗ {:<16} {languages}: `{program}` not found on PATH", spec.name);
+                println!("  {:<8} {:<16} {languages}: `{program}` not found on PATH", "missing", spec.name);
                 if !spec.install_hint.is_empty() {
                     println!("      install: {}", spec.install_hint);
                 }

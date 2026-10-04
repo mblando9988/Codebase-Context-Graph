@@ -11,17 +11,20 @@ Written in Rust. Comes with a command-line tool and a small desktop app.
 
 ## Download (macOS, Apple Silicon)
 
-The v1.0.0 download is a different build from the source here: a Node.js indexer
-and MCP server with a Python desktop app, started by a Rust launcher. The Rust code
-in this repo is a rewrite with a different design (see "Known limits" below).
-
 ```bash
 curl -L https://github.com/mblando9988/Codebase-Context-Graph/releases/latest/download/codebase-context-graph-macos-aarch64.tar.gz | tar -xz
 cd codebase-context-graph-macos-aarch64
+open "Codebase Context Graph.app"
 ```
 
-The folder also has `Codebase Context Graph.app` if you want the desktop app.
-To use the Rust version, build from source (below).
+The folder holds the desktop app (`Codebase Context Graph.app`) and the command-line tool
+(`codebase-context-graph`). Both need the indexers below. If you download the archive in a
+browser instead, macOS blocks the unsigned app until you run
+`xattr -dr com.apple.quarantine "Codebase Context Graph.app"`.
+
+**v1.0.0 is an older build** that parses with Tree-sitter and serves MCP tools. It predates
+the SCIP indexers described here, and its desktop app is a different program. Use a
+release newer than v1.0.0, or build from source (below).
 
 ## How it works
 
@@ -78,6 +81,19 @@ Everything it writes goes in one folder inside your project:
 
 The indexers do not write into your project, with one exception: rust-analyzer builds
 with cargo, which creates `target/` if it is not there yet.
+
+## Desktop app
+
+`Codebase Context Graph.app` is a small window around the command-line tool, so both run
+the same engine. Choose a project folder and press **Index project**. The window shows the
+indexer output and, when it finishes, the node and edge counts and how many files had
+semantic data; **Open results folder** opens `.codebase-context/`. **Check indexers** runs
+`doctor`, and **Stop** ends a run, including the indexers it started.
+
+An app opened from Finder does not get your shell's `PATH`, so it also looks for the
+indexers in `~/.cargo/bin`, `~/.local/bin`, `~/.volta/bin`, `~/.npm-global/bin`,
+`/opt/homebrew/bin` and `/usr/local/bin`. Put an absolute path in `command` (see
+Configuration) if yours live elsewhere.
 
 ## Languages
 
@@ -173,13 +189,13 @@ entry named like a built-in one replaces it (`"enabled": false` turns it off); a
 name adds a new indexer. In `command`, `{output}` is the `.scip` file to write and
 `{project_name}` the project name; it runs in the project root it was matched to.
 
-The desktop app runs the same CLI. It looks for the indexers on `PATH` and in
-`~/.cargo/bin`, `~/.local/bin`, `~/.npm-global/bin`, `/opt/homebrew/bin` and `/usr/local/bin`.
-Put an absolute path in `command` if yours live elsewhere.
-
 ## Known limits
 
 - The query server uses its own line format, not the MCP protocol.
+- The desktop app starts `index` and `doctor` and shows their output. It does not display the
+  graph; read `graph.db` or `graph.json`, or use `serve`.
+- `--analysis-mode` (the "Advanced" option of v1.0.0) is accepted and ignored. There is one
+  mode, and it is always semantic.
 - Every `index` re-runs the indexers and rebuilds everything. `watch` runs one index and exits.
 - One run per top-most project root (`Cargo.toml`, `tsconfig.json`, `package.json`,
   `pyproject.toml`, ...). A monorepo whose root manifest does not cover all packages needs
@@ -197,10 +213,16 @@ Put an absolute path in `command` if yours live elsewhere.
 cd rust-cli
 cargo build --release
 ./target/release/codebase-context-graph doctor --project-root /path/to/project
-cargo test --release --bin codebase-context-graph
+cargo test --release
 ```
 
-The desktop app builds as `codebase-context-graph-gui` in the same folder.
+The desktop app builds as `codebase-context-graph-gui` in the same folder. It runs the
+`codebase-context-graph` binary that sits next to it, so start it from there:
+`./target/release/codebase-context-graph-gui`.
+
+A release is published by pushing a tag that starts with `v`; `.github/workflows/release.yml`
+then builds the macOS package. Running that workflow by hand from the Actions tab builds the
+same package without publishing it.
 
 ## License
 
