@@ -1,129 +1,258 @@
+use crate::config::Config;
+use ignore::WalkBuilder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use std::path::Path;
 
-pub struct FileManifest {
-    pub file_path: String,
-    pub absolute_path: PathBuf,
+/// A source file that belongs to the project. This is the denominator for coverage:
+/// every one of these should end up with semantic data from some indexer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceFile {
+    /// Path relative to the project root, always with `/` separators.
+    pub path: String,
     pub language: String,
     pub size: u64,
-    pub content_hash: String,
-    pub content: String,
+    pub hash: String,
+    pub lines: i64,
 }
 
+pub struct ScanResult {
+    pub files: Vec<SourceFile>,
+    /// Relative paths of files whose name is one of the requested marker names
+    /// (`Cargo.toml`, `tsconfig.json`, ...), used to find project roots for indexers.
+    pub markers: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Compiles gitignore-style patterns (`dir/`, `*.ext`, `/rooted`, `!negated`).
+pub fn build_matcher(root: &Path, patterns: &[String]) -> Result<Gitignore, ignore::Error> {
+    let mut builder = GitignoreBuilder::new(root);
+    for pattern in patterns {
+        builder.add_line(None, pattern)?;
+    }
+    builder.build()
+}
+
+pub fn relative_string(rel: &Path) -> String {
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Walks the project, pruning ignored directories as it goes (so `node_modules` is never
+/// traversed). Unreadable entries become warnings instead of aborting the scan.
 pub fn scan_project(
-    project_root: &Path,
-    ignore_patterns: &[String],
-) -> Result<Vec<FileManifest>, Box<dyn std::error::Error>> {
-    let mut manifest = Vec::new();
-    let ignore_dirs: Vec<&str> = vec![
-        ".git",
-        "node_modules",
-        "dist",
-        "build",
-        "vendor",
-        "venv",
-        ".venv",
-        "env",
-        ".env",
-        "site-packages",
-        "__pycache__",
-        ".codebase-context",
-        ".pytest_cache",
-        ".ruff_cache",
-        "logs",
-        "tmp",
-        "archive",
-        "checkpoints",
-        "data",
-        "db",
-        "target",
-    ];
+    root: &Path,
+    config: &Config,
+    language_of: &dyn Fn(&str) -> Option<String>,
+    marker_names: &HashSet<String>,
+) -> Result<ScanResult, Box<dyn std::error::Error>> {
+    let matcher = build_matcher(root, &config.ignore_patterns)?;
 
-    for entry in WalkDir::new(project_root).follow_links(false) {
-        let entry = entry?;
-        let path = entry.path();
-
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let relative = path.strip_prefix(project_root).unwrap_or(path);
-        let relative_str = relative.to_string_lossy().replace('\\', "/");
-
-        if should_ignore(&relative_str, ignore_patterns, &ignore_dirs) {
-            continue;
-        }
-
-        let language = match crate::config::detect_language(&relative_str) {
-            Some(lang) => lang,
-            None => continue,
-        };
-
-        let content = match fs::read(path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        if looks_binary(&content) {
-            continue;
-        }
-
-        let hash = format!("{:x}", Sha256::digest(&content));
-
-        manifest.push(FileManifest {
-            file_path: relative_str,
-            absolute_path: path.to_path_buf(),
-            language,
-            size: content.len() as u64,
-            content_hash: hash,
-            content: String::from_utf8_lossy(&content).into_owned(),
+    let mut walker = WalkBuilder::new(root);
+    walker
+        .follow_links(false)
+        .hidden(true)
+        .ignore(false)
+        .git_global(false)
+        .git_ignore(config.respect_gitignore)
+        .git_exclude(config.respect_gitignore)
+        .require_git(false);
+    {
+        let root = root.to_path_buf();
+        walker.filter_entry(move |entry| {
+            let rel = entry.path().strip_prefix(&root).unwrap_or(entry.path());
+            if rel.as_os_str().is_empty() {
+                return true;
+            }
+            let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+            !matcher.matched(rel, is_dir).is_ignore()
         });
     }
 
-    manifest.sort_by(|a, b| a.file_path.cmp(&b.file_path));
-    Ok(manifest)
+    let mut files = Vec::new();
+    let mut markers = Vec::new();
+    let mut warnings = Vec::new();
+
+    for result in walker.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(err) => {
+                warnings.push(err.to_string());
+                continue;
+            }
+        };
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let Ok(rel) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        let rel = relative_string(rel);
+
+        if let Some(name) = entry.file_name().to_str() {
+            if marker_names.contains(name) {
+                markers.push(rel.clone());
+            }
+        }
+
+        let Some(language) = language_of(&rel) else {
+            continue;
+        };
+        match read_source_file(root, &rel, &language) {
+            Some(file) => files.push(file),
+            None => warnings.push(format!("skipped unreadable or binary file: {rel}")),
+        }
+    }
+
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    markers.sort();
+    Ok(ScanResult {
+        files,
+        markers,
+        warnings,
+    })
 }
 
-fn should_ignore(path: &str, patterns: &[String], ignore_dirs: &[&str]) -> bool {
-    let segments: Vec<&str> = path.split('/').collect();
-
-    if segments.iter().any(|s| ignore_dirs.contains(s)) {
-        return true;
+pub fn read_source_file(root: &Path, rel: &str, language: &str) -> Option<SourceFile> {
+    let bytes = fs::read(root.join(rel)).ok()?;
+    if bytes.contains(&0) {
+        return None;
     }
-
-    for pattern in patterns {
-        if pattern.starts_with("*.") {
-            let ext = &pattern[1..];
-            if path.ends_with(ext) {
-                return true;
-            }
-        } else if pattern.ends_with("/**") {
-            let prefix = &pattern[..pattern.len() - 3];
-            if path == prefix || path.starts_with(&format!("{}/", prefix)) {
-                return true;
-            }
-        } else if path == pattern {
-            return true;
-        }
+    let mut lines = bytes.iter().filter(|&&b| b == b'\n').count() as i64;
+    if bytes.last().is_some_and(|&b| b != b'\n') {
+        lines += 1;
     }
-
-    false
+    Some(SourceFile {
+        path: rel.to_string(),
+        language: language.to_string(),
+        size: bytes.len() as u64,
+        hash: format!("{:x}", Sha256::digest(&bytes)),
+        lines,
+    })
 }
 
-fn looks_binary(content: &[u8]) -> bool {
-    let limit = std::cmp::min(content.len(), 1024);
-    let mut suspicious = 0;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{default_config, detect_language};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    for &byte in &content[..limit] {
-        if byte == 0 {
-            return true;
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempProject(PathBuf);
+
+    impl TempProject {
+        fn new() -> Self {
+            let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let dir = std::env::temp_dir().join(format!("ccg-scan-{}-{}", std::process::id(), n));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            TempProject(dir)
         }
-        if (byte < 7 || byte > 14) && byte < 32 && byte != 9 {
-            suspicious += 1;
+        fn write(&self, rel: &str, content: &str) {
+            let path = self.0.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, content).unwrap();
         }
     }
 
-    suspicious > 16
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn language_of(path: &str) -> Option<String> {
+        detect_language(path).map(String::from)
+    }
+
+    fn scan(project: &TempProject, config: &Config, markers: &[&str]) -> ScanResult {
+        let marker_names = markers.iter().map(|m| m.to_string()).collect();
+        scan_project(&project.0, config, &language_of, &marker_names).unwrap()
+    }
+
+    fn paths(result: &ScanResult) -> Vec<&str> {
+        result.files.iter().map(|f| f.path.as_str()).collect()
+    }
+
+    #[test]
+    fn source_directories_named_db_and_data_are_scanned_but_dependency_directories_are_not() {
+        let p = TempProject::new();
+        p.write("src/db/connection.ts", "export const a = 1;\n");
+        p.write("pkg/data/loader.py", "x = 1\n");
+        p.write("node_modules/leftpad/index.js", "module.exports = 1;\n");
+        p.write("web/node_modules/deep/index.js", "module.exports = 2;\n");
+        p.write("target/debug/build.rs", "fn main() {}\n");
+        p.write("notes.txt", "not source\n");
+
+        let result = scan(&p, &default_config(&p.0), &[]);
+        assert_eq!(paths(&result), vec!["pkg/data/loader.py", "src/db/connection.ts"]);
+    }
+
+    #[test]
+    fn gitignore_is_respected_and_can_be_switched_off() {
+        let p = TempProject::new();
+        p.write(".gitignore", "generated/\n");
+        p.write("generated/api.ts", "export {};\n");
+        p.write("src/app.ts", "export {};\n");
+
+        let mut config = default_config(&p.0);
+        assert_eq!(paths(&scan(&p, &config, &[])), vec!["src/app.ts"]);
+
+        config.respect_gitignore = false;
+        assert_eq!(paths(&scan(&p, &config, &[])), vec!["generated/api.ts", "src/app.ts"]);
+    }
+
+    #[test]
+    fn user_patterns_use_gitignore_syntax_including_negation() {
+        let p = TempProject::new();
+        p.write("a.min.js", "1\n");
+        p.write("keep.min.js", "2\n");
+        p.write("legacy/old.py", "x = 1\n");
+        p.write("src/new.py", "x = 1\n");
+
+        let mut config = default_config(&p.0);
+        config.ignore_patterns.push("legacy/".to_string());
+        config.ignore_patterns.push("!keep.min.js".to_string());
+
+        assert_eq!(paths(&scan(&p, &config, &[])), vec!["keep.min.js", "src/new.py"]);
+    }
+
+    #[test]
+    fn marker_files_are_collected_even_though_they_are_not_source_files() {
+        let p = TempProject::new();
+        p.write("rust-cli/Cargo.toml", "[package]\n");
+        p.write("rust-cli/main.rs", "fn main() {}\n");
+        p.write("web/package.json", "{}\n");
+        p.write("node_modules/x/package.json", "{}\n");
+
+        let result = scan(&p, &default_config(&p.0), &["Cargo.toml", "package.json"]);
+        assert_eq!(result.markers, vec!["rust-cli/Cargo.toml", "web/package.json"]);
+        assert_eq!(paths(&result), vec!["rust-cli/main.rs"]);
+    }
+
+    #[test]
+    fn lines_size_and_hash_are_recorded_and_binary_files_are_skipped() {
+        let p = TempProject::new();
+        p.write("a.py", "one\ntwo\nthree");
+        p.write("b.py", "one\ntwo\n");
+        p.write("empty.py", "");
+        fs::write(p.0.join("bin.py"), b"\x00\x01\x02").unwrap();
+
+        let result = scan(&p, &default_config(&p.0), &[]);
+        let by_path = |name: &str| result.files.iter().find(|f| f.path == name).unwrap();
+        assert_eq!(by_path("a.py").lines, 3, "last line without newline still counts");
+        assert_eq!(by_path("b.py").lines, 2);
+        assert_eq!(by_path("empty.py").lines, 0);
+        assert_eq!(by_path("a.py").size, 13);
+        assert_eq!(by_path("a.py").hash.len(), 64);
+        assert!(!paths(&result).contains(&"bin.py"));
+        assert!(result.warnings.iter().any(|w| w.contains("bin.py")));
+    }
 }
