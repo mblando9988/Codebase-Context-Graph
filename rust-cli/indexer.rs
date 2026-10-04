@@ -424,14 +424,14 @@ mod tests {
 
     #[test]
     fn a_nested_indexer_root_becomes_a_relative_prefix() {
-        let base = std::env::temp_dir().join(format!("ccg-prefix-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
         let nested = base.join("rust-cli");
         std::fs::create_dir_all(&nested).unwrap();
         let mut index = Index::default();
         index.metadata.mut_or_insert_default().project_root = format!("file://{}", nested.display());
-        assert_eq!(root_prefix_from_metadata(&base, &index), "rust-cli");
+        assert_eq!(root_prefix_from_metadata(base, &index), "rust-cli");
         index.metadata.mut_or_insert_default().project_root = format!("file://{}", base.display());
-        assert_eq!(root_prefix_from_metadata(&base, &index), "");
-        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(root_prefix_from_metadata(base, &index), "");
     }
 }

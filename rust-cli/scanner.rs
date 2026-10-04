@@ -140,31 +140,20 @@ pub fn read_source_file(root: &Path, rel: &str, language: &str) -> Option<Source
 mod tests {
     use super::*;
     use crate::config::{default_config, detect_language};
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    struct TempProject(PathBuf);
+    /// A uniquely named, private directory that is removed on drop, even if a test panics.
+    struct TempProject(tempfile::TempDir);
 
     impl TempProject {
         fn new() -> Self {
-            let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-            let dir = std::env::temp_dir().join(format!("ccg-scan-{}-{}", std::process::id(), n));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).unwrap();
-            TempProject(dir)
+            TempProject(tempfile::Builder::new().prefix("ccg-scan-").tempdir().unwrap())
+        }
+        fn path(&self) -> &Path {
+            self.0.path()
         }
         fn write(&self, rel: &str, content: &str) {
-            let path = self.0.join(rel);
+            let path = self.path().join(rel);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, content).unwrap();
-        }
-    }
-
-    impl Drop for TempProject {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -174,7 +163,7 @@ mod tests {
 
     fn scan(project: &TempProject, config: &Config, markers: &[&str]) -> ScanResult {
         let marker_names = markers.iter().map(|m| m.to_string()).collect();
-        scan_project(&project.0, config, &language_of, &marker_names).unwrap()
+        scan_project(project.path(), config, &language_of, &marker_names).unwrap()
     }
 
     fn paths(result: &ScanResult) -> Vec<&str> {
@@ -191,7 +180,7 @@ mod tests {
         p.write("target/debug/build.rs", "fn main() {}\n");
         p.write("notes.txt", "not source\n");
 
-        let result = scan(&p, &default_config(&p.0), &[]);
+        let result = scan(&p, &default_config(p.path()), &[]);
         assert_eq!(paths(&result), vec!["pkg/data/loader.py", "src/db/connection.ts"]);
     }
 
@@ -202,7 +191,7 @@ mod tests {
         p.write("generated/api.ts", "export {};\n");
         p.write("src/app.ts", "export {};\n");
 
-        let mut config = default_config(&p.0);
+        let mut config = default_config(p.path());
         assert_eq!(paths(&scan(&p, &config, &[])), vec!["src/app.ts"]);
 
         config.respect_gitignore = false;
@@ -217,7 +206,7 @@ mod tests {
         p.write("legacy/old.py", "x = 1\n");
         p.write("src/new.py", "x = 1\n");
 
-        let mut config = default_config(&p.0);
+        let mut config = default_config(p.path());
         config.ignore_patterns.push("legacy/".to_string());
         config.ignore_patterns.push("!keep.min.js".to_string());
 
@@ -232,7 +221,7 @@ mod tests {
         p.write("web/package.json", "{}\n");
         p.write("node_modules/x/package.json", "{}\n");
 
-        let result = scan(&p, &default_config(&p.0), &["Cargo.toml", "package.json"]);
+        let result = scan(&p, &default_config(p.path()), &["Cargo.toml", "package.json"]);
         assert_eq!(result.markers, vec!["rust-cli/Cargo.toml", "web/package.json"]);
         assert_eq!(paths(&result), vec!["rust-cli/main.rs"]);
     }
@@ -243,9 +232,9 @@ mod tests {
         p.write("a.py", "one\ntwo\nthree");
         p.write("b.py", "one\ntwo\n");
         p.write("empty.py", "");
-        fs::write(p.0.join("bin.py"), b"\x00\x01\x02").unwrap();
+        fs::write(p.path().join("bin.py"), b"\x00\x01\x02").unwrap();
 
-        let result = scan(&p, &default_config(&p.0), &[]);
+        let result = scan(&p, &default_config(p.path()), &[]);
         let by_path = |name: &str| result.files.iter().find(|f| f.path == name).unwrap();
         assert_eq!(by_path("a.py").lines, 3, "last line without newline still counts");
         assert_eq!(by_path("b.py").lines, 2);

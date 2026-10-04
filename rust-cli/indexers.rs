@@ -682,8 +682,8 @@ mod tests {
     #[test]
     fn programs_are_found_on_path_and_then_in_the_fallback_directories() {
         use std::os::unix::fs::PermissionsExt;
-        let base = std::env::temp_dir().join(format!("ccg-find-{}", std::process::id()));
-        let (on_path, fallback) = (base.join("a"), base.join("b"));
+        let base = tempfile::tempdir().unwrap();
+        let (on_path, fallback) = (base.path().join("a"), base.path().join("b"));
         fs::create_dir_all(&on_path).unwrap();
         fs::create_dir_all(&fallback).unwrap();
         for (dir, name, mode) in [(&on_path, "tool-a", 0o755), (&fallback, "tool-b", 0o755), (&fallback, "not-exec", 0o644)] {
@@ -701,7 +701,6 @@ mod tests {
         );
         assert_eq!(find_program_in("not-exec", path_var, &[fallback]), None, "must be executable");
         assert_eq!(find_program_in("/definitely/not/here", None, &[]), None);
-        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -758,25 +757,25 @@ mod tests {
 
     #[test]
     fn typescript_indexing_uses_the_projects_own_tsconfig_when_there_is_one() {
-        let dir = std::env::temp_dir().join(format!("ccg-tsc-own-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         fs::write(dir.join("tsconfig.json"), "{}").unwrap();
-        let job = job_for_tsconfig(&dir);
-        assert_eq!(prepare_tsconfig(&dir, &job).unwrap(), dir.join("tsconfig.json"));
+        let job = job_for_tsconfig(dir);
+        assert_eq!(prepare_tsconfig(dir, &job).unwrap(), dir.join("tsconfig.json"));
 
         fs::remove_file(dir.join("tsconfig.json")).unwrap();
         fs::write(dir.join("jsconfig.json"), "{}").unwrap();
-        assert_eq!(prepare_tsconfig(&dir, &job).unwrap(), dir.join("jsconfig.json"));
-        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(prepare_tsconfig(dir, &job).unwrap(), dir.join("jsconfig.json"));
     }
 
     #[test]
     fn without_a_tsconfig_one_is_generated_outside_the_project_and_covers_javascript() {
-        let dir = std::env::temp_dir().join(format!("ccg-tsc-gen-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         fs::create_dir_all(dir.join(".codebase-context/scip")).unwrap();
-        let job = job_for_tsconfig(&dir);
+        let job = job_for_tsconfig(dir);
 
-        let path = prepare_tsconfig(&dir, &job).unwrap();
+        let path = prepare_tsconfig(dir, &job).unwrap();
         assert_eq!(path, dir.join(".codebase-context/scip/scip-typescript.tsconfig.json"));
         assert!(!dir.join("tsconfig.json").exists(), "nothing is written into the project");
 
@@ -786,7 +785,6 @@ mod tests {
         assert_eq!(generated["include"][0], format!("{base}/**/*"));
         assert_eq!(generated["exclude"][0], format!("{base}/**/node_modules"));
         assert_eq!(generated["exclude"][1], format!("{base}/**/dist"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -800,19 +798,9 @@ mod tests {
     #[cfg(unix)]
     mod running {
         use super::*;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-        fn workdir() -> PathBuf {
-            let dir = std::env::temp_dir().join(format!(
-                "ccg-run-{}-{}",
-                std::process::id(),
-                COUNTER.fetch_add(1, Ordering::SeqCst)
-            ));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).unwrap();
-            dir
+        /// A uniquely named, private directory that is removed on drop, even if a test panics.
+        fn workdir() -> tempfile::TempDir {
+            tempfile::Builder::new().prefix("ccg-run-").tempdir().unwrap()
         }
 
         fn job(dir: &Path, command: &[&str]) -> Job {
@@ -836,61 +824,61 @@ mod tests {
 
         #[test]
         fn a_successful_run_reports_ok_and_leaves_the_index() {
-            let dir = workdir();
-            let r = run_job(&dir, &job(&dir, &["sh", "-c", "echo hi; : > \"$0\"", "{output}"]), "p", Duration::from_secs(10));
+            let tmp = workdir();
+            let dir = tmp.path();
+            let r = run_job(dir, &job(dir, &["sh", "-c", "echo hi; : > \"$0\"", "{output}"]), "p", Duration::from_secs(10));
             assert_eq!(r.status, RunStatus::Ok, "{}", r.message);
             let index = load_index(Path::new(r.output.as_deref().unwrap())).expect("empty file is an empty index");
             assert!(index.documents.is_empty());
-            let _ = fs::remove_dir_all(&dir);
         }
 
         #[test]
         fn a_failing_run_reports_the_tail_of_the_indexer_log() {
-            let dir = workdir();
-            let r = run_job(&dir, &job(&dir, &["sh", "-c", "echo 'cannot find Cargo.toml' >&2; exit 3"]), "p", Duration::from_secs(10));
+            let tmp = workdir();
+            let dir = tmp.path();
+            let r = run_job(dir, &job(dir, &["sh", "-c", "echo 'cannot find Cargo.toml' >&2; exit 3"]), "p", Duration::from_secs(10));
             assert_eq!(r.status, RunStatus::Failed);
             assert!(r.message.contains("cannot find Cargo.toml"), "{}", r.message);
             assert!(r.output.is_none());
-            let _ = fs::remove_dir_all(&dir);
         }
 
         #[test]
         fn exiting_zero_without_writing_an_index_is_a_failure() {
-            let dir = workdir();
-            let r = run_job(&dir, &job(&dir, &["sh", "-c", "true"]), "p", Duration::from_secs(10));
+            let tmp = workdir();
+            let dir = tmp.path();
+            let r = run_job(dir, &job(dir, &["sh", "-c", "true"]), "p", Duration::from_secs(10));
             assert_eq!(r.status, RunStatus::Failed);
             assert!(r.message.contains("wrote no index"), "{}", r.message);
-            let _ = fs::remove_dir_all(&dir);
         }
 
         #[test]
         fn a_missing_program_is_reported_with_the_install_hint() {
-            let dir = workdir();
-            let r = run_job(&dir, &job(&dir, &["definitely-not-installed-xyz"]), "p", Duration::from_secs(10));
+            let tmp = workdir();
+            let dir = tmp.path();
+            let r = run_job(dir, &job(dir, &["definitely-not-installed-xyz"]), "p", Duration::from_secs(10));
             assert_eq!(r.status, RunStatus::Missing);
             assert!(r.message.contains("Install: install fake"), "{}", r.message);
-            let _ = fs::remove_dir_all(&dir);
         }
 
         #[test]
         fn a_hung_indexer_is_killed_at_the_timeout() {
-            let dir = workdir();
+            let tmp = workdir();
+            let dir = tmp.path();
             let started = Instant::now();
-            let r = run_job(&dir, &job(&dir, &["sh", "-c", "sleep 30"]), "p", Duration::from_millis(300));
+            let r = run_job(dir, &job(dir, &["sh", "-c", "sleep 30"]), "p", Duration::from_millis(300));
             assert_eq!(r.status, RunStatus::Failed);
             assert!(r.message.contains("timed out"), "{}", r.message);
             assert!(started.elapsed() < Duration::from_secs(10));
-            let _ = fs::remove_dir_all(&dir);
         }
 
         #[test]
         fn a_tool_whose_version_probe_fails_counts_as_not_installed() {
-            let dir = workdir();
-            let mut j = job(&dir, &["sh", "-c", "true"]);
+            let tmp = workdir();
+            let dir = tmp.path();
+            let mut j = job(dir, &["sh", "-c", "true"]);
             j.spec.version_args = s(&["-c", "exit 1"]);
-            let r = run_job(&dir, &j, "p", Duration::from_secs(10));
+            let r = run_job(dir, &j, "p", Duration::from_secs(10));
             assert_eq!(r.status, RunStatus::Missing);
-            let _ = fs::remove_dir_all(&dir);
         }
     }
 }

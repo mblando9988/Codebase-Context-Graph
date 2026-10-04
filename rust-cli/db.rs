@@ -296,17 +296,13 @@ mod tests {
 
     #[test]
     fn opening_the_same_database_twice_keeps_its_data() {
-        let path = std::env::temp_dir().join(format!("ccg-db-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph.db");
         {
             let db = open_database(&path).unwrap();
             replace_all(&db, &Graph { nodes: vec![node("kept")], edges: vec![] }, &[], &[], &[]).unwrap();
         }
         let db = open_database(&path).unwrap();
         assert_eq!(count(&db, "nodes"), 1);
-        drop(db);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
     }
 }
