@@ -3,9 +3,16 @@ mod db;
 mod graph;
 mod indexer;
 mod indexers;
+mod mcp;
 mod scanner;
-mod server;
+mod schema;
 mod symbols;
+mod tools;
+
+#[cfg(test)]
+mod conformance;
+#[cfg(test)]
+mod mcp_tests;
 
 use std::path::PathBuf;
 use std::process;
@@ -39,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         "watch" => indexer::watch_project(&project_root),
         "smoke" => indexer::smoke_test(&project_root),
-        "serve" => server::run(&project_root),
+        "mcp" => mcp::run(&project_root),
         "help" | "--help" | "-h" => {
             print_usage();
             Ok(())
@@ -66,7 +73,7 @@ fn print_usage() {
     eprintln!("  index  [--project-root <path>] [--scip <file>]...   run the indexers and build the graph");
     eprintln!("  watch  [--project-root <path>]   runs one index (file watching is not implemented)");
     eprintln!("  smoke  [--project-root <path>]   check the database");
-    eprintln!("  serve  [--project-root <path>]   answer queries as JSON lines on stdin/stdout");
+    eprintln!("  mcp    [--project-root <path>]   serve the graph to AI agents over MCP (stdio)");
     eprintln!("Indexers: rust-analyzer, scip-typescript, scip-python (see `doctor`).");
 }
 
