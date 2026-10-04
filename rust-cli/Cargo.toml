@@ -2,7 +2,7 @@
 name = "codebase-context-graph"
 version = "0.1.0"
 edition = "2024"
-description = "Rust launcher and packager for the codebase-context-graph tool"
+description = "Builds a queryable code graph from compiler-grade SCIP indexes (rust-analyzer, scip-typescript, scip-python)"
 
 [[bin]]
 name = "codebase-context-graph"
@@ -15,18 +15,15 @@ path = "gui.rs"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 eframe = "0.29"
-notify = "8.0"
-rand = "0.8"
-regex = "1.10"
-rusqlite = { version = "0.32", features = ["bundled"] }
+ignore = "0.4"
+# scip pins protobuf to exactly this version.
+protobuf = "=3.7.2"
 rfd = "0.15"
+rusqlite = { version = "0.32", features = ["bundled"] }
+scip = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-tree-sitter = "0.25.10"
-tree-sitter-bash = "0.25.1"
-tree-sitter-javascript = "0.25.0"
-tree-sitter-python = "0.25.0"
-tree-sitter-rust = "0.24.2"
-tree-sitter-typescript = "0.23.2"
-walkdir = "2.5"
+
+[dev-dependencies]
+tempfile = "3"

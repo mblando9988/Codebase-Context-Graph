@@ -1,10 +1,3 @@
-mod config;
-mod db;
-mod indexer;
-mod parser;
-mod scanner;
-mod server;
-
 use eframe::egui;
 use std::path::PathBuf;
 use std::process::Command;

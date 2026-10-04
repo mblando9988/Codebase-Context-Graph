@@ -1,9 +1,11 @@
 mod config;
 mod db;
+mod graph;
 mod indexer;
-mod parser;
+mod indexers;
 mod scanner;
 mod server;
+mod symbols;
 
 use std::path::PathBuf;
 use std::process;
@@ -19,26 +21,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = &args[1];
     let project_root = get_project_root(&args);
 
+    if args.iter().any(|a| a == "--analysis-mode") {
+        eprintln!("note: --analysis-mode is ignored; indexing is always semantic now.");
+    }
+
     let result: Result<(), Box<dyn std::error::Error>> = match command.as_str() {
-        "init" => {
-            indexer::init_project(&project_root)?;
-            Ok(())
-        }
+        "init" => indexer::init_project(&project_root),
+        "doctor" => indexer::doctor(&project_root),
         "index" => {
-            let advanced = args.contains(&"--analysis-mode".to_string());
-            indexer::index_project(&project_root, advanced)?;
-            Ok(())
+            let options = indexer::IndexOptions {
+                scip_files: get_flag_values(&args, "--scip")
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect(),
+            };
+            indexer::index_project(&project_root, &options)
         }
-        "watch" => {
-            indexer::watch_project(&project_root)?;
-            Ok(())
-        }
-        "smoke" => {
-            indexer::smoke_test(&project_root)?;
-            Ok(())
-        }
-        "serve" => {
-            server::run(&project_root)?;
+        "watch" => indexer::watch_project(&project_root),
+        "smoke" => indexer::smoke_test(&project_root),
+        "serve" => server::run(&project_root),
+        "help" | "--help" | "-h" => {
+            print_usage();
             Ok(())
         }
         _ => {
@@ -58,22 +61,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_usage() {
     eprintln!("codebase-context-graph");
-    eprintln!("  init [--project-root <path>]");
-    eprintln!("  index [--project-root <path>] [--analysis-mode standard|advanced]");
-    eprintln!("  watch [--project-root <path>]");
-    eprintln!("  smoke [--project-root <path>]");
-    eprintln!("  serve [--project-root <path>]");
-    eprintln!("No Node.js required.");
+    eprintln!("  init   [--project-root <path>]   create .codebase-context/config.json (keeps an existing one)");
+    eprintln!("  doctor [--project-root <path>]   check which SCIP indexers are installed");
+    eprintln!("  index  [--project-root <path>] [--scip <file>]...   run the indexers and build the graph");
+    eprintln!("  watch  [--project-root <path>]   runs one index (file watching is not implemented)");
+    eprintln!("  smoke  [--project-root <path>]   check the database");
+    eprintln!("  serve  [--project-root <path>]   answer queries as JSON lines on stdin/stdout");
+    eprintln!("Indexers: rust-analyzer, scip-typescript, scip-python (see `doctor`).");
 }
 
 fn get_project_root(args: &[String]) -> PathBuf {
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        if arg == "--project-root" {
-            if let Some(path) = iter.next() {
-                return PathBuf::from(path);
-            }
-        }
+    let root = get_flag_values(args, "--project-root")
+        .into_iter()
+        .next()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    std::fs::canonicalize(&root).unwrap_or(root)
+}
+
+/// Every value that follows `flag`, for flags that may be repeated.
+fn get_flag_values(args: &[String], flag: &str) -> Vec<String> {
+    args.windows(2)
+        .filter(|pair| pair[0] == flag)
+        .map(|pair| pair[1].clone())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+
+    #[test]
+    fn flags_can_be_repeated_and_are_read_in_order() {
+        let a = args(&["x", "index", "--scip", "a.scip", "--project-root", "/p", "--scip", "b.scip"]);
+        assert_eq!(get_flag_values(&a, "--scip"), vec!["a.scip", "b.scip"]);
+        assert_eq!(get_flag_values(&a, "--project-root"), vec!["/p"]);
+        assert!(get_flag_values(&a, "--missing").is_empty());
+    }
+
+    #[test]
+    fn a_trailing_flag_without_a_value_is_ignored() {
+        assert!(get_flag_values(&args(&["x", "index", "--scip"]), "--scip").is_empty());
+    }
 }

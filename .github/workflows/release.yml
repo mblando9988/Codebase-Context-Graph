@@ -81,7 +81,18 @@ jobs:
           cat > release/README.md << 'EOF'
           # Codebase Context Graph
           
-          A native tool that scans local codebases and builds a queryable code graph for AI coding agents.
+          A native tool that builds a queryable code graph (SQLite + JSON) from compiler-grade
+          SCIP indexes: definitions, references and calls resolved by rust-analyzer, scip-typescript
+          and scip-python.
+          
+          ## Requirements
+          
+          The indexers are separate programs. Run `./codebase-context-graph doctor` to see which
+          are installed.
+          
+          - Rust: `rustup component add rust-analyzer`
+          - TypeScript / JavaScript: `npm install -g @sourcegraph/scip-typescript`
+          - Python: `npm install -g @sourcegraph/scip-python`
           
           ## Quick Start
           
@@ -92,13 +103,16 @@ jobs:
           ### Option 2: Command Line
           
           ```bash
+          # Check which indexers are installed
+          ./codebase-context-graph doctor --project-root /path/to/project
+          
           # Initialize a project
           ./codebase-context-graph init --project-root /path/to/project
           
           # Build the code graph
           ./codebase-context-graph index --project-root /path/to/project
           
-          # Start MCP server for AI agents
+          # Answer queries as JSON lines on stdin/stdout
           ./codebase-context-graph serve --project-root /path/to/project
           ```
           
@@ -106,26 +120,12 @@ jobs:
           
           | Command | Description |
           |---------|-------------|
+          | `doctor` | Check which indexers are installed |
           | `init` | Create `.codebase-context/config.json` |
-          | `index` | Build the code graph |
-          | `serve` | Start MCP stdio server |
-          | `watch` | Reindex on file changes |
+          | `index` | Run the indexers and build the code graph |
+          | `serve` | Answer queries as JSON lines (not MCP) |
+          | `watch` | Runs one index (file watching is not implemented) |
           | `smoke` | Quick validation test |
-          
-          ## MCP Integration
-          
-          Add to your Claude Code or IDE MCP configuration:
-          
-          ```json
-          {
-            "mcpServers": {
-              "codebase-context": {
-                "command": "/absolute/path/to/codebase-context-graph",
-                "args": ["serve", "--project-root", "/path/to/project"]
-              }
-            }
-          }
-          ```
           
           ## License
           
@@ -162,7 +162,7 @@ jobs:
           body: |
             ## Codebase Context Graph
             
-            A native macOS app for building queryable code graphs for AI coding agents.
+            A native macOS app and CLI that build queryable code graphs from compiler-grade SCIP indexes.
             
             ### Download
             
@@ -175,6 +175,7 @@ jobs:
             
             ### Quick Start CLI
             ```bash
+            ./codebase-context-graph doctor --project-root /path/to/project
             ./codebase-context-graph init --project-root /path/to/project
             ./codebase-context-graph index --project-root /path/to/project
             ./codebase-context-graph serve --project-root /path/to/project
