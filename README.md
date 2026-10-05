@@ -269,6 +269,9 @@ files, a 600-character line, non-ASCII names. After changing one, run
   with thousands of callers, and ids and paths past every limit.
 - `tests/mcp_stdio.rs` runs the real binary over pipes.
 
+GitHub Actions runs the whole suite on Linux and macOS for every pull request and every push
+to `main` (`.github/workflows/tests.yml`).
+
 ## License
 
 MIT
