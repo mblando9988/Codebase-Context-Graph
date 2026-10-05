@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [main, claude/sleepy-goldberg-09vf9y]
+    branches: [main]
   pull_request:
 
 permissions:
